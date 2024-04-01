@@ -95,6 +95,7 @@ public interface KafkaClient extends Closeable {
     void send(ClientRequest request, long now);
 
     /**
+     * 实际负责读写socket的方法
      * Do actual reads and writes from sockets.
      *
      * @param timeout The maximum amount of time to wait for responses in ms, must be non-negative. The implementation

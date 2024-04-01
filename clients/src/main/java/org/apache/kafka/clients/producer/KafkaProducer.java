@@ -461,6 +461,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
             this.errors = this.metrics.sensor("errors");
             this.sender = newSender(logContext, kafkaClient, this.metadata);
             String ioThreadName = NETWORK_THREAD_PREFIX + " | " + clientId;
+            // 启动发送线程，异步发送请求和处理响应
             this.ioThread = new KafkaThread(ioThreadName, this.sender, true);
             this.ioThread.start();
             config.logUnused();
@@ -995,6 +996,8 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
             long nowMs = time.milliseconds();
             ClusterAndWaitTime clusterAndWaitTime;
             try {
+                // maxBlockTimeMs决定了send方法最多阻塞多长时间，每个耗时的环节逐步递减
+                // 在有限的时间获取到元数据，触发网络请求
                 clusterAndWaitTime = waitOnMetadata(record.topic(), record.partition(), nowMs, maxBlockTimeMs);
             } catch (KafkaException e) {
                 if (metadata.isClosed())
@@ -1002,10 +1005,14 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
                 throw e;
             }
             nowMs += clusterAndWaitTime.waitedOnMetadataMs;
+            // 减去获取元数据的时间
             long remainingWaitMs = Math.max(0, maxBlockTimeMs - clusterAndWaitTime.waitedOnMetadataMs);
             Cluster cluster = clusterAndWaitTime.cluster;
+            // 对key与value使用配置的序列化类型进行序列化；通过网络发送数据，无论如何最终都是二进制，才能发送
             byte[] serializedKey;
             try {
+                // 将topic;headers；key一起序列化（下面没有使用headers）
+                // 字符串的序列化很简单，就是根据某种编码类型获取它的二进制
                 serializedKey = keySerializer.serialize(record.topic(), record.headers(), record.key());
             } catch (ClassCastException cce) {
                 throw new SerializationException("Can't convert key of class " + record.key().getClass().getName() +
@@ -1031,6 +1038,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
 
             int serializedSize = AbstractRecords.estimateSizeInBytesUpperBound(apiVersions.maxUsableProduceMagic(),
                     compressionType, serializedKey, serializedValue, headers);
+            // 检查大小
             ensureValidRecordSize(serializedSize);
             long timestamp = record.timestamp() == null ? nowMs : record.timestamp();
 
@@ -1039,6 +1047,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
 
             // Append the record to the accumulator.  Note, that the actual partition may be
             // calculated there and can be accessed via appendCallbacks.topicPartition.
+            // 添加到缓冲区
             RecordAccumulator.RecordAppendResult result = accumulator.append(record.topic(), partition, timestamp, serializedKey,
                     serializedValue, headers, appendCallbacks, remainingWaitMs, abortOnNewBatch, nowMs, cluster);
             assert appendCallbacks.getPartition() != RecordMetadata.UNKNOWN_PARTITION;
@@ -1046,6 +1055,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
             if (result.abortForNewBatch) {
                 int prevPartition = partition;
                 onNewBatch(record.topic(), cluster, prevPartition);
+                // 计算分区
                 partition = partition(record, serializedKey, serializedValue, cluster);
                 if (log.isTraceEnabled()) {
                     log.trace("Retrying append due to new batch creation for topic {} partition {}. The old partition was {}", record.topic(), partition, prevPartition);
@@ -1063,6 +1073,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
                 transactionManager.maybeAddPartition(appendCallbacks.topicPartition());
             }
 
+            // 发现数据满了，或者创建新的batch，唤醒sender去执行发送；最终唤醒的是底层NIO的java.nio.channels.Selector
             if (result.batchIsFull || result.newBatchCreated) {
                 log.trace("Waking up the sender since topic {} partition {} is either full or getting a new batch", record.topic(), appendCallbacks.getPartition());
                 this.sender.wakeup();
@@ -1116,14 +1127,17 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
      * @throws KafkaException for all Kafka-related exceptions, including the case where this method is called after producer close
      */
     private ClusterAndWaitTime waitOnMetadata(String topic, Integer partition, long nowMs, long maxWaitMs) throws InterruptedException {
+        // fetch不贴切
         Cluster cluster = metadata.fetch();
 
         if (cluster.invalidTopics().contains(topic))
             throw new InvalidTopicException(topic);
 
         // add topic to metadata topic list if it is not there already and reset expiry
+        // 将尚未存在的主题添加到元数据主题列表并重置过期，让sender有topic去加载相关元数据
         metadata.add(topic, nowMs);
 
+        // 从partitionsByTopic查topic对应的分区；如果返回partitionCount非空，说明已经获取过了
         Integer partitionsCount = cluster.partitionCountForTopic(topic);
         // Return cached metadata if we have it, and if the record's partition is either undefined
         // or within the known partition range
@@ -1143,9 +1157,12 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
                 log.trace("Requesting metadata update for topic {}.", topic);
             }
             metadata.add(topic, nowMs + elapsed);
+            // 标记为需要更新，然后等待拉取
             int version = metadata.requestUpdateForTopic(topic);
+            // 唤醒阻塞的client，让它去发送请求拉取元数据；然后去等待版本号更新，注意它们的通信方式和逻辑；拉取数据走的是异步的方式
             sender.wakeup();
             try {
+                // 可以学习等待时间的封装方式
                 metadata.awaitUpdate(version, remainingWaitMs);
             } catch (TimeoutException ex) {
                 // Rethrow with original maxWaitMs to prevent logging exception with remainingWaitMs
@@ -1155,6 +1172,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
             }
             cluster = metadata.fetch();
             elapsed = time.milliseconds() - nowMs;
+            // 如果等待时间大于最大等待时间，抛出超时异常
             if (elapsed >= maxWaitMs) {
                 throw new TimeoutException(partitionsCount == null ?
                         String.format("Topic %s not present in metadata after %d ms.",

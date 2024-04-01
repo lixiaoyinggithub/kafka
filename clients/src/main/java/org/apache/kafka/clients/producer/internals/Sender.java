@@ -253,19 +253,25 @@ public class Sender implements Runnable {
             }
         }
 
+        // 在循环的后面写循环关闭的代码，循环是否进行用开关表示
+        // 结束阶段开始处理剩余的记录
         log.debug("Beginning shutdown of Kafka producer I/O thread, sending remaining records.");
 
+        // 停止接收，但是可能还有请求在事务管理器中
+        // 累积器还在等待确认
         // okay we stopped accepting requests but there may still be
         // requests in the transaction manager, accumulator or waiting for acknowledgment,
         // wait until these are completed.
         while (!forceClose && ((this.accumulator.hasUndrained() || this.client.inFlightRequestCount() > 0) || hasPendingTransactionalRequests())) {
             try {
+                // 再跑一次，把各种未处理的情况处理完
                 runOnce();
             } catch (Exception e) {
                 log.error("Uncaught error in kafka producer I/O thread: ", e);
             }
         }
 
+        // 开始丢弃
         // Abort the transaction if any commit or abort didn't go through the transaction manager's queue
         while (!forceClose && transactionManager != null && transactionManager.hasOngoingTransaction()) {
             if (!transactionManager.isCompleting()) {
@@ -410,6 +416,7 @@ public class Sender implements Runnable {
         }
 
         accumulator.resetNextBatchExpiryTime();
+        // 获取过期未获得响应的请求
         List<ProducerBatch> expiredInflightBatches = getExpiredInflightBatches(now);
         List<ProducerBatch> expiredBatches = this.accumulator.expiredBatches(now);
         expiredBatches.addAll(expiredInflightBatches);

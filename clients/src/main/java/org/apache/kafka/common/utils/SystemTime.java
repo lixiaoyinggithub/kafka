@@ -52,6 +52,7 @@ public class SystemTime implements Time {
                 if (currentTimeMs >= deadlineMs)
                     throw new TimeoutException("Condition not satisfied before deadline");
 
+                // 结束时间减去当前时间，所有等待的时间
                 obj.wait(deadlineMs - currentTimeMs);
             }
         }

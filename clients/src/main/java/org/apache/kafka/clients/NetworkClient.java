@@ -546,6 +546,7 @@ public class NetworkClient implements KafkaClient {
                 clientRequest.apiKey(), header, clientRequest.requestTimeoutMs(), destination, request);
         }
         Send send = request.toSend(header);
+        // 等待响应的列表
         InFlightRequest inFlightRequest = new InFlightRequest(
                 clientRequest,
                 header,
@@ -574,14 +575,18 @@ public class NetworkClient implements KafkaClient {
             // If there are aborted sends because of unsupported version exceptions or disconnects,
             // handle them immediately without waiting for Selector#poll.
             List<ClientResponse> responses = new ArrayList<>();
+            // 添加丢弃的请求
             handleAbortedSends(responses);
+            // 完成丢弃的请求的响应，复用completeResponses;这些细节能体现面向对象的精髓
+            // 设计的类，具有抽象的行为，外部调用时，不用关注在它内部的逻辑
             completeResponses(responses);
             return responses;
         }
-
+        // 元数据是否需要更新
         long metadataTimeout = metadataUpdater.maybeUpdate(now);
         long telemetryTimeout = telemetrySender != null ? telemetrySender.maybeUpdate(now) : Integer.MAX_VALUE;
         try {
+            // 不是非常理解内部的发送过程
             this.selector.poll(Utils.min(timeout, metadataTimeout, telemetryTimeout, defaultRequestTimeoutMs));
         } catch (IOException e) {
             log.error("Unexpected error during I/O", e);
@@ -590,13 +595,21 @@ public class NetworkClient implements KafkaClient {
         // process completed actions
         long updatedNow = this.time.milliseconds();
         List<ClientResponse> responses = new ArrayList<>();
+        // 处理完成发送
         handleCompletedSends(responses, updatedNow);
+        // 处理完成接收
         handleCompletedReceives(responses, updatedNow);
+        // 处理断开连接
         handleDisconnections(responses, updatedNow);
+        // 处理连接
         handleConnections();
+        // 处理初始化api版本请求
         handleInitiateApiVersionRequests(updatedNow);
+        // 处理连接超时
         handleTimedOutConnections(responses, updatedNow);
+        // 处理请求超时
         handleTimedOutRequests(responses, updatedNow);
+        // 完成响应
         completeResponses(responses);
 
         return responses;
@@ -938,8 +951,10 @@ public class NetworkClient implements KafkaClient {
 
             // If the received response includes a throttle delay, throttle the connection.
             maybeThrottle(response, req.header.apiVersion(), req.destination, now);
+            //内部请求并且类型为元数据
             if (req.isInternalRequest && response instanceof MetadataResponse)
                 metadataUpdater.handleSuccessfulResponse(req.header, now, (MetadataResponse) response);
+            //内部请求并且类型为版本响应
             else if (req.isInternalRequest && response instanceof ApiVersionsResponse)
                 handleApiVersionsResponse(responses, req, now, (ApiVersionsResponse) response);
             else if (req.isInternalRequest && response instanceof GetTelemetrySubscriptionsResponse)
@@ -947,6 +962,7 @@ public class NetworkClient implements KafkaClient {
             else if (req.isInternalRequest && response instanceof PushTelemetryResponse)
                 telemetrySender.handleResponse((PushTelemetryResponse) response);
             else
+            //内部请求并且类型为版本响应
                 responses.add(req.completed(response, now));
         }
     }
@@ -1111,7 +1127,7 @@ public class NetworkClient implements KafkaClient {
 
         @Override
         public long maybeUpdate(long now) {
-            // should we update our metadata?
+            // should we update our metadata? 根据时间计算出是否需要更新，间隔到达一定时间？
             long timeToNextMetadataUpdate = metadata.timeToNextUpdate(now);
             long waitForMetadataFetch = hasFetchInProgress() ? defaultRequestTimeoutMs : 0;
 
@@ -1211,6 +1227,7 @@ public class NetworkClient implements KafkaClient {
                 Metadata.MetadataRequestAndVersion requestAndVersion = metadata.newMetadataRequestAndVersion(now);
                 MetadataRequest.Builder metadataRequest = requestAndVersion.requestBuilder;
                 log.debug("Sending metadata request {} to node {}", metadataRequest, node);
+                // 发送元数据请求
                 sendInternalMetadataRequest(metadataRequest, nodeConnectionId, now);
                 inProgress = new InProgressData(requestAndVersion.requestVersion, requestAndVersion.isPartialUpdate);
                 return defaultRequestTimeoutMs;
