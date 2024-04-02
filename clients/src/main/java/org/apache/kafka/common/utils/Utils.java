@@ -1354,6 +1354,9 @@ public final class Utils {
     }
 
     /**
+     *
+     * 将内存池的内容写出到输出流，从池子当前的位置拷贝
+     *
      * Write the contents of a buffer to an output stream. The bytes are copied from the current position
      * in the buffer.
      * @param out The output to write to

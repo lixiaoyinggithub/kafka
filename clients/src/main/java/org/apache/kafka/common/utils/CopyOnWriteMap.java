@@ -24,10 +24,13 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentMap;
 
 /**
+ * 自己实现一个简单的写时同步，即修改时做一个拷贝
+ *
  * A simple read-optimized map implementation that synchronizes only writes and does a full copy on each modification
  */
 public class CopyOnWriteMap<K, V> implements ConcurrentMap<K, V> {
 
+    // volatile保证内存可见性，当map地址被改变后，所有引用立刻可见改变；配合写时拷贝来使用
     private volatile Map<K, V> map;
 
     public CopyOnWriteMap() {

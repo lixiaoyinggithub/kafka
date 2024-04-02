@@ -303,6 +303,8 @@ public class RecordAccumulator {
         try {
             // Loop to retry in case we encounter partitioner's race conditions.
             while (true) {
+
+                // 处理分区问题
                 // If the message doesn't have any partition affinity, so we pick a partition based on the broker
                 // availability and performance.  Note, that here we peek current partition before we hold the
                 // deque lock, so we'll need to make sure that it's not changed while we were waiting for the
@@ -317,12 +319,14 @@ public class RecordAccumulator {
                     effectivePartition = partition;
                 }
 
+                // 设置分区到回调方法
                 // Now that we know the effective partition, let the caller know.
                 setPartition(callbacks, effectivePartition);
 
                 // check if we have an in-progress batch
                 Deque<ProducerBatch> dq = topicInfo.batches.computeIfAbsent(effectivePartition, k -> new ArrayDeque<>());
                 synchronized (dq) {
+                    // 加锁之后校验分区有没有变化，这是边界问题解决的典范
                     // After taking the lock, validate that the partition hasn't changed and retry.
                     if (partitionChanged(topic, topicInfo, partitionInfo, dq, nowMs, cluster))
                         continue;
